@@ -1,0 +1,121 @@
+name: Deploy (Azure primary → AWS secondary)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Requires repository variable ENABLE_DEPLOY=true and the OIDC setup in docs/RUNBOOK.md §5.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  azure:
+    name: Deploy to Azure App Service
+    if: ${{ vars.ENABLE_DEPLOY == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          APP_REGION: azure
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to staging slot
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.AZURE_APP_NAME }}
+          slot-name: staging
+          package: .
+
+      - name: Smoke test staging
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "https://${{ vars.AZURE_APP_NAME }}-staging.azurewebsites.net/api/health")
+            [ "$code" = "200" ] && exit 0
+            sleep 5
+          done
+          echo "staging health check failed" && exit 1
+
+      - name: Swap staging → production
+        run: |
+          az webapp deployment slot swap \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "${{ vars.AZURE_APP_NAME }}" \
+            --slot staging --target-slot production
+
+  aws:
+    name: Deploy to AWS App Runner
+    needs: azure
+    if: ${{ vars.ENABLE_DEPLOY == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO: ${{ vars.AWS_ECR_REPOSITORY }}
+          TAG: ${{ github.sha }}
+        run: |
+          docker build -t "$REGISTRY/$REPO:$TAG" .
+          docker push "$REGISTRY/$REPO:$TAG"
+
+      - name: Trigger App Runner deployment
+        env:
+          SERVICE_ARN: ${{ vars.AWS_APPRUNNER_SERVICE_ARN }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO: ${{ vars.AWS_ECR_REPOSITORY }}
+          TAG: ${{ github.sha }}
+        run: |
+          aws apprunner update-service \
+            --service-arn "$SERVICE_ARN" \
+            --source-configuration "{\"ImageRepository\":{\"ImageIdentifier\":\"$REGISTRY/$REPO:$TAG\",\"ImageRepositoryType\":\"ECR\",\"ImageConfiguration\":{\"Port\":\"8080\"}}}"
+
+  verify:
+    name: Verify primary and secondary health
+    needs: [azure, aws]
+    if: ${{ vars.ENABLE_DEPLOY == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll public hostname
+        run: |
+          for i in $(seq 1 60); do
+            body=$(curl -s "https://${{ vars.PUBLIC_HOSTNAME }}/api/health" || true)
+            echo "$body"
+            echo "$body" | grep -q '"status":"ok"' && exit 0
+            sleep 10
+          done
+          exit 1
