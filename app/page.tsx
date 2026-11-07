@@ -4,8 +4,18 @@ import { createMessage } from "./actions";
 export const dynamic = "force-dynamic";
 
 const region = process.env.APP_REGION ?? "local";
-const regionColor =
-  region === "azure" ? "#0ea5e9" : region === "aws" ? "#f59e0b" : "#64748b";
+const deployment = process.env.APP_DEPLOYMENT ?? "local";
+const version = process.env.APP_VERSION ?? "dev";
+
+function regionLabel(value: string): string {
+  if (value === "azure") return "Azure App Service";
+  if (value === "aws") return "AWS App Runner";
+  return "Local development";
+}
+
+function formatDate(value: string): string {
+  return `${new Date(value).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
 
 export default async function HomePage() {
   let messages: Message[] = [];
@@ -18,133 +28,123 @@ export default async function HomePage() {
   }
 
   return (
-    <main style={{ maxWidth: 760, margin: "0 auto", padding: "48px 20px 80px" }}>
-      <div
-        style={{
-          display: "inline-block",
-          padding: "6px 14px",
-          borderRadius: 999,
-          background: regionColor,
-          color: "#08111f",
-          fontWeight: 700,
-          fontSize: 13,
-          letterSpacing: 0.4,
-          textTransform: "uppercase",
-        }}
-      >
-        served from: {region}
-      </div>
+    <main className="page">
+      <header className="site-header">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">
+            CF
+          </span>
+          <span className="brand-name">Cloud Failover</span>
+        </div>
+        <span className="header-note">Azure / AWS</span>
+      </header>
 
-      <h1 style={{ fontSize: 32, margin: "18px 0 8px" }}>Cloud Failover Demo</h1>
-      <p style={{ color: "#9aa7c2", marginTop: 0, lineHeight: 1.6 }}>
-        Next.js + PostgreSQL. Azure App Service is primary; AWS is the secondary region. The badge
-        above tells you which deployment answered this request.
-      </p>
-
-      <section
-        style={{
-          marginTop: 28,
-          padding: 22,
-          borderRadius: 14,
-          background: "#121a33",
-          border: "1px solid #1f2a4a",
-        }}
-      >
-        <h2 style={{ margin: 0, fontSize: 18 }}>Write a message</h2>
-        <p style={{ color: "#9aa7c2", fontSize: 14 }}>
-          This writes to PostgreSQL, so it must still work after a failover.
+      <section className="hero">
+        <p className="eyebrow">Technical assessment — Round 2</p>
+        <h1>
+          One application.
+          <br />
+          Two clouds.
+        </h1>
+        <p className="lede">
+          A small Next.js application backed by PostgreSQL, deployed to Azure App Service
+          with AWS App Runner as the secondary region. Traffic Manager keeps a single
+          hostname and redirects traffic when a health check fails.
         </p>
-        <form action={createMessage} style={{ display: "grid", gap: 10 }}>
-          <input
-            name="name"
-            placeholder="Your name"
-            required
-            maxLength={80}
-            style={inputStyle}
-          />
-          <textarea
-            name="body"
-            placeholder="Your message"
-            required
-            maxLength={500}
-            rows={3}
-            style={{ ...inputStyle, resize: "vertical" }}
-          />
-          <button
-            type="submit"
-            style={{
-              justifySelf: "start",
-              padding: "10px 18px",
-              borderRadius: 8,
-              border: "none",
-              background: "#3b82f6",
-              color: "white",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Save to database
-          </button>
+
+        <dl className="meta">
+          <div className="meta-item">
+            <dt>Served from</dt>
+            <dd>
+              <span className={`region region-${region}`}>{regionLabel(region)}</span>
+            </dd>
+          </div>
+          <div className="meta-item">
+            <dt>Database</dt>
+            <dd>{dbError ? "Unavailable" : "PostgreSQL connected"}</dd>
+          </div>
+          <div className="meta-item">
+            <dt>Health</dt>
+            <dd>
+              <a href="/api/health">/api/health</a>
+            </dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="block" aria-labelledby="write-heading">
+        <div className="block-heading">
+          <h2 id="write-heading">Write an entry</h2>
+          <p>Stored in PostgreSQL so it survives a failover.</p>
+        </div>
+
+        <form action={createMessage} className="form">
+          <div className="field">
+            <label htmlFor="name">Name</label>
+            <input
+              id="name"
+              name="name"
+              placeholder="Your name"
+              required
+              maxLength={80}
+              autoComplete="name"
+            />
+          </div>
+
+          <div className="field">
+            <label htmlFor="body">Message</label>
+            <textarea
+              id="body"
+              name="body"
+              placeholder="Write something brief"
+              required
+              maxLength={500}
+              rows={4}
+            />
+          </div>
+
+          <div className="form-footer">
+            <button type="submit">Save entry</button>
+            <span className="form-note">Up to 500 characters</span>
+          </div>
         </form>
       </section>
 
-      <section style={{ marginTop: 28 }}>
-        <h2 style={{ fontSize: 18 }}>Latest messages</h2>
+      <section className="block" aria-labelledby="entries-heading">
+        <div className="block-heading">
+          <h2 id="entries-heading">Recent entries</h2>
+          <p>
+            {messages.length} of the latest 10, newest first.
+          </p>
+        </div>
 
         {dbError ? (
-          <div
-            style={{
-              padding: 16,
-              borderRadius: 10,
-              background: "#3b1220",
-              border: "1px solid #7f1d3a",
-              color: "#fecdd3",
-              fontSize: 14,
-            }}
-          >
-            Database not reachable: {dbError}
-            <br />
-            Set <code>DATABASE_URL</code> in .env.local (see README).
+          <div className="notice">
+            <strong>Database unavailable.</strong> {dbError}
           </div>
         ) : messages.length === 0 ? (
-          <p style={{ color: "#9aa7c2" }}>No messages yet — add the first one.</p>
+          <p className="empty">No entries yet.</p>
         ) : (
-          <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 10 }}>
+          <ul className="entries">
             {messages.map((message) => (
-              <li
-                key={message.id}
-                style={{
-                  padding: 16,
-                  borderRadius: 10,
-                  background: "#121a33",
-                  border: "1px solid #1f2a4a",
-                }}
-              >
-                <div style={{ fontWeight: 600 }}>{message.name}</div>
-                <div style={{ color: "#c7d2e5", marginTop: 4 }}>{message.body}</div>
-                <div style={{ color: "#64748b", fontSize: 12, marginTop: 8 }}>
-                  {new Date(message.created_at).toISOString()}
+              <li key={message.id} className="entry">
+                <div className="entry-head">
+                  <span className="entry-name">{message.name}</span>
+                  <time dateTime={message.created_at}>{formatDate(message.created_at)}</time>
                 </div>
+                <p className="entry-body">{message.body}</p>
               </li>
             ))}
           </ul>
         )}
       </section>
 
-      <p style={{ marginTop: 40, fontSize: 13, color: "#64748b" }}>
-        Health check: <a href="/api/health" style={{ color: "#60a5fa" }}>/api/health</a>
-      </p>
+      <footer className="site-footer">
+        <span>
+          {deployment} · v{version}
+        </span>
+        <span>Single hostname, priority routing, 30s DNS TTL.</span>
+      </footer>
     </main>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 8,
-  border: "1px solid #2b3a61",
-  background: "#0b1226",
-  color: "#e8ecf6",
-  fontSize: 14,
-  boxSizing: "border-box",
-};
